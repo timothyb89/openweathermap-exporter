@@ -185,7 +185,7 @@ struct Report {
   clouds: ReportClouds,
 
   /// visibility in meters (does not honor units param)
-  visibility: usize
+  visibility: Option<usize>
 }
 
 /// Custom Result-Option hybrid to expose errors from the reporting thread
@@ -335,6 +335,10 @@ fn export_report(report: &MaybeReport, opts: &Options) -> String {
 
   for condition in &report.weather {
     export!(s, opts, "owm_condition", 1, kind = condition.description);
+  }
+
+  if let Some(visibility) = report.visibility {
+    export!(s, opts, "owm_visiblity", visibility as f64, unit = "meters");
   }
 
   s
