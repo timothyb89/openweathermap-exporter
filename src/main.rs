@@ -12,6 +12,7 @@ use structopt::StructOpt;
 
 use serde::{Serialize, Deserialize};
 use serde_json::json;
+use simple_prometheus_exporter::{Exporter, export};
 use warp::Filter;
 
 const OWM_API_ENDPOINT: &str = "https://api.openweathermap.org/data/2.5/weather";
@@ -237,111 +238,61 @@ fn report_thread(report_lock: Arc<RwLock<MaybeReport>>, opts: Options) {
   });
 }
 
-/// formats a prometheus metric
-fn export<F>(opts: &Options, name: &str, value: F, mut labels: Vec<(String, String)>) -> String
-where
-  F: Into<f64>
-{
-  let mut effective_labels = Vec::new();
-  effective_labels.append(&mut labels);
-
-  if let Some(location) = &opts.location {
-    effective_labels.push(("location".to_string(), location.clone()));
-  }
-
-  let mut s = String::new();
-  s.push_str(name);
-
-  if !effective_labels.is_empty() {
-    s.push('{');
-    for (i, (k, v)) in effective_labels.iter().enumerate() {
-      if i > 0 {
-        s.push(',');
-      }
-
-      s.push_str(k);
-      s.push_str("=\"");
-      s.push_str(v);
-      s.push('"');
-    }
-    s.push('}');
-  }
-
-  s.push(' ');
-  s.push_str(&value.into().to_string());
-  s.push('\n');
-
-  s
-}
-
-macro_rules! export {
-  ($dest:ident, $opts:ident, $name:expr, $value:expr, $($label_key:ident = $label_value:expr),*) => {
-    let mut labels: Vec<(String, String)> = Vec::new();
-    $(labels.push((stringify!($label_key).to_string(), $label_value.to_string()));)*
-
-    $dest.push_str(&export($opts, $name, $value, labels));
-  };
-
-  ($dest:ident, $opts:ident, $name:expr, $value:expr) => {
-    $dest.push_str(&export($opts, $name, $value, vec![]));
-  };
-}
-
-fn export_report(report: &MaybeReport, opts: &Options) -> String {
-  let mut s = String::new();
+fn export_report(exporter: &Exporter, report: &MaybeReport, units: &Units) -> String {
+  let mut s = exporter.session();
 
   let report = match report {
     MaybeReport::Ok(report) => report,
-    MaybeReport::None => return s,
+    MaybeReport::None => return s.to_string(),
     MaybeReport::Err(code) => {
-      export!(s, opts, "owm_error", 1);
+      export!(s, "owm_error", 1);
       if let Some(code) = code {
-        export!(s, opts, "owm_error", 1, code = code.to_string());
+        export!(s, "owm_error", 1, code = code.to_string());
       }
 
-      return s;
+      return s.to_string();
     },
   };
 
-  export!(s, opts, "owm_error", 0);
+  export!(s, "owm_error", 0);
 
-  export!(s, opts, "owm_temp", report.main.temp, unit = opts.units.units_temp());
-  export!(s, opts, "owm_temp_min", report.main.temp_min, unit = opts.units.units_temp());
-  export!(s, opts, "owm_temp_max", report.main.temp_max, unit = opts.units.units_temp());
-  export!(s, opts, "owm_feels_like", report.main.feels_like, unit = opts.units.units_temp());
-  export!(s, opts, "owm_humidity", report.main.humidity, unit = "percent");
-  export!(s, opts, "owm_pressure", report.main.pressure, unit = opts.units.units_pressure());
+  export!(s, "owm_temp", report.main.temp, unit = units.units_temp());
+  export!(s, "owm_temp_min", report.main.temp_min, unit = units.units_temp());
+  export!(s, "owm_temp_max", report.main.temp_max, unit = units.units_temp());
+  export!(s, "owm_feels_like", report.main.feels_like, unit = units.units_temp());
+  export!(s, "owm_humidity", report.main.humidity, unit = "percent");
+  export!(s, "owm_pressure", report.main.pressure, unit = units.units_pressure());
 
-  export!(s, opts, "owm_clouds_all", report.clouds.all, unit = "percent");
+  export!(s, "owm_clouds_all", report.clouds.all, unit = "percent");
 
   if let Some(volume) = report.rain.volume_1h {
-    export!(s, opts, "owm_rain_volume", volume, period = "1h", unit = "mm");
+    export!(s, "owm_rain_volume", volume, period = "1h", unit = "mm");
   }
 
   if let Some(volume) = report.rain.volume_3h {
-    export!(s, opts, "owm_rain_volume", volume, period = "3h", unit = "mm");
+    export!(s, "owm_rain_volume", volume, period = "3h", unit = "mm");
   }
 
   if let Some(volume) = report.snow.volume_1h {
-    export!(s, opts, "owm_snow_volume", volume, period = "1h", unit = "mm");
+    export!(s, "owm_snow_volume", volume, period = "1h", unit = "mm");
   }
 
   if let Some(volume) = report.snow.volume_3h {
-    export!(s, opts, "owm_snow_volume", volume, period = "3h", unit = "mm");
+    export!(s, "owm_snow_volume", volume, period = "3h", unit = "mm");
   }
 
-  export!(s, opts, "owm_wind_direction", report.wind.deg, unit = "degrees");
-  export!(s, opts, "owm_wind_speed", report.wind.speed, unit = opts.units.units_speed());
+  export!(s, "owm_wind_direction", report.wind.deg, unit = "degrees");
+  export!(s, "owm_wind_speed", report.wind.speed, unit = units.units_speed());
 
   for condition in &report.weather {
-    export!(s, opts, "owm_condition", 1, kind = condition.description);
+    export!(s, "owm_condition", 1, kind = &condition.description);
   }
 
   if let Some(visibility) = report.visibility {
-    export!(s, opts, "owm_visiblity", visibility as f64, unit = "meters");
+    export!(s, "owm_visiblity", visibility as f64, unit = "meters");
   }
 
-  s
+  s.to_string()
 }
 
 #[tokio::main]
@@ -350,6 +301,13 @@ async fn main() {
 
   let opts = Options::from_args();
   let port = opts.port;
+
+  let mut exporter = Exporter::new();
+  if let Some(location) = &opts.location {
+    exporter.add_global_label("location", location);
+  }
+
+  let exporter = Arc::new(exporter);
 
   let latest_report_lock = Arc::new(RwLock::new(MaybeReport::None));
   report_thread(latest_report_lock.clone(), opts.clone());
@@ -367,7 +325,7 @@ async fn main() {
 
   let metrics_lock = Arc::clone(&latest_report_lock);
   let r_metrics = warp::path("metrics").map(move || {
-    export_report(&*metrics_lock.read().unwrap(), &opts)
+    export_report(&exporter, &*metrics_lock.read().unwrap(), &opts.units)
   });
 
   let routes = warp::get().and(r_json).or(r_metrics);

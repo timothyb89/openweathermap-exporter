@@ -820,6 +820,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "simple-prometheus-exporter",
  "structopt",
  "tokio",
  "warp",
@@ -1335,6 +1336,11 @@ dependencies = [
  "fake-simd",
  "opaque-debug",
 ]
+
+[[package]]
+name = "simple-prometheus-exporter"
+version = "0.1.0"
+source = "git+https://github.com/timothyb89/simple-prometheus-exporter-rs?tag=v0.1.0#fe3b903c5f50221ab1ccc6e83a0f64ff8a2ce43b"
 
 [[package]]
 name = "siphasher"
